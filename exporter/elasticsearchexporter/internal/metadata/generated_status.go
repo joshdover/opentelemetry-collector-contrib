@@ -12,6 +12,7 @@ const (
 	Type            = "elasticsearch"
 	TracesStability = component.StabilityLevelBeta
 	LogsStability   = component.StabilityLevelBeta
+	MetricsStability   = component.StabilityLevelBeta
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {
