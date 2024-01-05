@@ -19,10 +19,11 @@ import (
 type elasticsearchLogsExporter struct {
 	logger *zap.Logger
 
-	index          string
-	logstashFormat LogstashFormatSettings
-	dynamicIndex   bool
-	maxAttempts    int
+	index            string
+	logstashFormat   LogstashFormatSettings
+	dynamicIndex     bool
+	dynamicIndexMode string
+	maxAttempts      int
 
 	client      *esClientCurrent
 	bulkIndexer esBulkIndexerCurrent
@@ -53,22 +54,32 @@ func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporte
 		maxAttempts = cfg.Retry.MaxRequests
 	}
 
-	model := &encodeModel{dedup: cfg.Mapping.Dedup, dedot: cfg.Mapping.Dedot}
+	model := &encodeModel{dedup: cfg.Mapping.Dedup, dedot: cfg.Mapping.Dedot, mapping: cfg.Mapping.Mode}
 
 	indexStr := cfg.LogsIndex
 	if cfg.Index != "" {
 		indexStr = cfg.Index
 	}
+
+	dynamicIndexMode := ""
+	switch cfg.LogsDynamicIndex.Mode {
+	case "":
+		dynamicIndexMode = "prefix_suffix"
+	case "data_stream":
+		dynamicIndexMode = "data_stream"
+	}
+
 	esLogsExp := &elasticsearchLogsExporter{
 		logger:      logger,
 		client:      client,
 		bulkIndexer: bulkIndexer,
 
-		index:          indexStr,
-		dynamicIndex:   cfg.LogsDynamicIndex.Enabled,
-		maxAttempts:    maxAttempts,
-		model:          model,
-		logstashFormat: cfg.LogstashFormat,
+		index:            indexStr,
+		dynamicIndex:     cfg.LogsDynamicIndex.Enabled,
+		dynamicIndexMode: dynamicIndexMode,
+		maxAttempts:      maxAttempts,
+		model:            model,
+		logstashFormat:   cfg.LogstashFormat,
 	}
 	return esLogsExp, nil
 }
@@ -106,10 +117,19 @@ func (e *elasticsearchLogsExporter) pushLogsData(ctx context.Context, ld plog.Lo
 func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) error {
 	fIndex := e.index
 	if e.dynamicIndex {
-		prefix := getFromBothResourceAndAttribute(indexPrefix, resource, record)
-		suffix := getFromBothResourceAndAttribute(indexSuffix, resource, record)
+		if e.dynamicIndexMode == "prefix_suffix" {
+			prefix := getFromBothResourceAndAttribute(indexPrefix, resource, record, "")
+			suffix := getFromBothResourceAndAttribute(indexSuffix, resource, record, "")
 
-		fIndex = fmt.Sprintf("%s%s%s", prefix, fIndex, suffix)
+			fIndex = fmt.Sprintf("%s%s%s", prefix, fIndex, suffix)
+		} else if e.dynamicIndexMode == "data_stream" {
+			dsDataset := getFromBothResourceAndAttribute(dataStreamDataset, resource, record, defaultDataStreamDataset)
+			dsNamespace := getFromBothResourceAndAttribute(dataStreamNamespace, resource, record, defaultDataStreamNamespace)
+
+			fIndex = fmt.Sprintf("%s-%s-%s", "logs", dsDataset, dsNamespace)
+		} else {
+			return fmt.Errorf("unknown dynamic index mode: %s", e.dynamicIndexMode)
+		}
 	}
 
 	if e.logstashFormat.Enabled {

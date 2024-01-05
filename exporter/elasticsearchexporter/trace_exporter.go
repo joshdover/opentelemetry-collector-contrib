@@ -98,8 +98,8 @@ func (e *elasticsearchTracesExporter) pushTraceData(
 func (e *elasticsearchTracesExporter) pushTraceRecord(ctx context.Context, resource pcommon.Resource, span ptrace.Span, scope pcommon.InstrumentationScope) error {
 	fIndex := e.index
 	if e.dynamicIndex {
-		prefix := getFromBothResourceAndAttribute(indexPrefix, resource, span)
-		suffix := getFromBothResourceAndAttribute(indexSuffix, resource, span)
+		prefix := getFromBothResourceAndAttribute(indexPrefix, resource, span, "")
+		suffix := getFromBothResourceAndAttribute(indexSuffix, resource, span, "")
 
 		fIndex = fmt.Sprintf("%s%s%s", prefix, fIndex, suffix)
 	}
