@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	Type            = "elasticsearch"
-	TracesStability = component.StabilityLevelBeta
-	LogsStability   = component.StabilityLevelBeta
+	Type             = "elasticsearch"
+	TracesStability  = component.StabilityLevelBeta
+	MetricsStability = component.StabilityLevelDevelopment
+	LogsStability    = component.StabilityLevelBeta
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {

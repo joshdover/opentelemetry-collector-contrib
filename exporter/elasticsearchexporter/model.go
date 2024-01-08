@@ -5,11 +5,17 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"hash"
+	"math"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/objmodel"
@@ -18,6 +24,7 @@ import (
 
 type mappingModel interface {
 	encodeLog(pcommon.Resource, plog.LogRecord, pcommon.InstrumentationScope) ([]byte, error)
+	encodeMetrics(pcommon.Resource, pmetric.MetricSlice, pcommon.InstrumentationScope) ([][]byte, error)
 	encodeSpan(pcommon.Resource, ptrace.Span, pcommon.InstrumentationScope) ([]byte, error)
 }
 
@@ -73,6 +80,118 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 	var buf bytes.Buffer
 	err := document.Serialize(&buf, m.dedot)
 	return buf.Bytes(), err
+}
+
+func valueHash(h hash.Hash, v pcommon.Value) {
+	switch v.Type() {
+	case pcommon.ValueTypeEmpty:
+		h.Write([]byte{0})
+	case pcommon.ValueTypeStr:
+		h.Write([]byte(v.Str()))
+	case pcommon.ValueTypeBool:
+		if v.Bool() {
+			h.Write([]byte{1})
+		} else {
+			h.Write([]byte{0})
+		}
+	case pcommon.ValueTypeDouble:
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf[:], math.Float64bits(v.Double()))
+		h.Write(buf)
+	case pcommon.ValueTypeInt:
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf[:], uint64(v.Int()))
+		h.Write(buf)
+	case pcommon.ValueTypeBytes:
+		h.Write(v.Bytes().AsRaw())
+	case pcommon.ValueTypeMap:
+		mapHash(h, v.Map())
+	case pcommon.ValueTypeSlice:
+		sliceHash(h, v.Slice())
+	}
+}
+
+func sliceHash(h hash.Hash, s pcommon.Slice) {
+	for i := 0; i < s.Len(); i++ {
+		valueHash(h, s.At(i))
+	}
+}
+
+func mapHash(h hash.Hash, m pcommon.Map) {
+	m.Range(func(k string, v pcommon.Value) bool {
+		h.Write([]byte(v.Str()))
+		valueHash(h, v)
+
+		return true
+	})
+}
+
+func metricHash(h hash.Hash, t pcommon.Timestamp, attrs pcommon.Map) string {
+	h.Reset()
+
+	h.Write([]byte(t.AsTime().Format(time.RFC3339Nano)))
+
+	mapHash(h, attrs)
+
+	return string(h.Sum(nil))
+}
+
+func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.MetricSlice, scope pcommon.InstrumentationScope) ([][]byte, error) {
+	hasher := sha256.New()
+	var baseDoc objmodel.Document
+	baseDoc.AddAttributes("", resource.Attributes())
+
+	docs := map[string]*objmodel.Document{}
+
+	for i := 0; i < metrics.Len(); i++ {
+		m := metrics.At(i)
+
+		var dps pmetric.NumberDataPointSlice
+
+		// TODO: support more metric types
+		switch m.Type() {
+		case pmetric.MetricTypeGauge:
+			dps = m.Gauge().DataPoints()
+		case pmetric.MetricTypeSum:
+			dps = m.Sum().DataPoints()
+		}
+
+		for j := 0; j < dps.Len(); j++ {
+			dp := dps.At(j)
+
+			hash := metricHash(hasher, dp.Timestamp(), dp.Attributes())
+			doc, ok := docs[hash]
+			if !ok {
+				d := baseDoc.Clone()
+				d.AddTimestamp("@timestamp", dp.Timestamp())
+				d.AddAttributes("", dp.Attributes())
+				docs[hash] = &d
+				doc = &d
+			}
+
+			switch dp.ValueType() {
+			case pmetric.NumberDataPointValueTypeDouble:
+				// doc.Add(m.Name(), objmodel.DoubleValue(dp.DoubleValue()))
+				doc.AddAttribute(m.Name(), pcommon.NewValueDouble(dp.DoubleValue()))
+			case pmetric.NumberDataPointValueTypeInt:
+				// doc.Add(m.Name(), objmodel.IntValue(dp.IntValue()))
+				doc.AddAttribute(m.Name(), pcommon.NewValueInt(dp.IntValue()))
+			}
+		}
+	}
+
+	res := make([][]byte, 0, len(docs))
+
+	for _, doc := range docs {
+		var buf bytes.Buffer
+		err := doc.Serialize(&buf, m.dedot) // TODO: handle err
+		if err != nil {
+			fmt.Printf("Serialize error: %v\n", err)
+		}
+		res = append(res, buf.Bytes())
+	}
+
+	return res, nil
 }
 
 func (m *encodeModel) encodeSpan(resource pcommon.Resource, span ptrace.Span, scope pcommon.InstrumentationScope) ([]byte, error) {

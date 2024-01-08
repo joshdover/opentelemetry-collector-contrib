@@ -45,6 +45,12 @@ type Config struct {
 	LogsIndex string `mapstructure:"logs_index"`
 	// fall back to pure LogsIndex, if 'elasticsearch.index.prefix' or 'elasticsearch.index.suffix' are not found in resource or attribute (prio: resource > attribute)
 	LogsDynamicIndex DynamicIndexSetting `mapstructure:"logs_dynamic_index"`
+
+	// This setting is required when logging pipelines used.
+	MetricsIndex string `mapstructure:"metrics_index"`
+	// fall back to pure LogsIndex, if 'elasticsearch.index.prefix' or 'elasticsearch.index.suffix' are not found in resource or attribute (prio: resource > attribute)
+	MetricsDynamicIndex DynamicIndexSetting `mapstructure:"metrics_dynamic_index"`
+
 	// This setting is required when traces pipelines used.
 	TracesIndex string `mapstructure:"traces_index"`
 	// fall back to pure TracesIndex, if 'elasticsearch.index.prefix' or 'elasticsearch.index.suffix' are not found in resource or attribute (prio: resource > attribute)

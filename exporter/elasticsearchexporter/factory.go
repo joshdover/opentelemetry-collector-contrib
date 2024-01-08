@@ -20,9 +20,10 @@ import (
 
 const (
 	// The value of "type" key in configuration.
-	defaultLogsIndex   = "logs-generic-default"
-	defaultTracesIndex = "traces-generic-default"
-	userAgentHeaderKey = "User-Agent"
+	defaultLogsIndex    = "logs-generic-default"
+	defaultMetricsIndex = "metrics-generic-default"
+	defaultTracesIndex  = "traces-generic-default"
+	userAgentHeaderKey  = "User-Agent"
 )
 
 // NewFactory creates a factory for Elastic exporter.
@@ -31,6 +32,7 @@ func NewFactory() exporter.Factory {
 		metadata.Type,
 		createDefaultConfig,
 		exporter.WithLogs(createLogsExporter, metadata.LogsStability),
+		exporter.WithMetrics(createMetricsExporter, metadata.MetricsStability),
 		exporter.WithTraces(createTracesExporter, metadata.TracesStability),
 	)
 }
@@ -43,9 +45,10 @@ func createDefaultConfig() component.Config {
 		HTTPClientSettings: HTTPClientSettings{
 			Timeout: 90 * time.Second,
 		},
-		Index:       "",
-		LogsIndex:   defaultLogsIndex,
-		TracesIndex: defaultTracesIndex,
+		Index:        "",
+		LogsIndex:    defaultLogsIndex,
+		MetricsIndex: defaultMetricsIndex,
+		TracesIndex:  defaultTracesIndex,
 		Retry: RetrySettings{
 			Enabled:         true,
 			MaxRequests:     3,
@@ -91,6 +94,34 @@ func createLogsExporter(
 		cfg,
 		logsExporter.pushLogsData,
 		exporterhelper.WithShutdown(logsExporter.Shutdown),
+		exporterhelper.WithQueue(cf.QueueSettings),
+	)
+}
+
+// createMetricsExporter creates a new exporter for Metrics.
+//
+// Metrics are directly indexed into Elasticsearch.
+func createMetricsExporter(
+	ctx context.Context,
+	set exporter.CreateSettings,
+	cfg component.Config,
+) (exporter.Metrics, error) {
+	cf := cfg.(*Config)
+	if cf.Index != "" {
+		set.Logger.Warn("index option are deprecated and replaced with metrics_index and traces_index.")
+	}
+
+	exporter, err := newMetricsExporter(set.Logger, cf)
+	if err != nil {
+		return nil, fmt.Errorf("cannot configure Elasticsearch metrics exporter: %w", err)
+	}
+
+	return exporterhelper.NewMetricsExporter(
+		ctx,
+		set,
+		cfg,
+		exporter.pushMetricsData,
+		exporterhelper.WithShutdown(exporter.Shutdown),
 		exporterhelper.WithQueue(cf.QueueSettings),
 	)
 }

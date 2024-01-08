@@ -9,18 +9,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
-	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.uber.org/zap"
 )
 
-type elasticsearchLogsExporter struct {
+type elasticsearchMetricsExporter struct {
 	logger *zap.Logger
 
 	index            string
-	logstashFormat   LogstashFormatSettings
 	dynamicIndex     bool
 	dynamicIndexMode string
 	maxAttempts      int
@@ -30,11 +28,7 @@ type elasticsearchLogsExporter struct {
 	model       mappingModel
 }
 
-var retryOnStatus = []int{500, 502, 503, 504, 429}
-
-const createAction = "create"
-
-func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporter, error) {
+func newMetricsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchMetricsExporter, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -56,7 +50,7 @@ func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporte
 
 	model := &encodeModel{dedup: cfg.Mapping.Dedup, dedot: cfg.Mapping.Dedot, mapping: cfg.Mapping.Mode}
 
-	indexStr := cfg.LogsIndex
+	indexStr := cfg.MetricsIndex
 	if cfg.Index != "" {
 		indexStr = cfg.Index
 	}
@@ -69,62 +63,61 @@ func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporte
 		dynamicIndexMode = "data_stream"
 	}
 
-	esLogsExp := &elasticsearchLogsExporter{
+	esMetricsExp := &elasticsearchMetricsExporter{
 		logger:      logger,
 		client:      client,
 		bulkIndexer: bulkIndexer,
 
 		index:            indexStr,
-		dynamicIndex:     cfg.LogsDynamicIndex.Enabled,
+		dynamicIndex:     cfg.MetricsDynamicIndex.Enabled,
 		dynamicIndexMode: dynamicIndexMode,
 		maxAttempts:      maxAttempts,
 		model:            model,
-		logstashFormat:   cfg.LogstashFormat,
 	}
-	return esLogsExp, nil
+	return esMetricsExp, nil
 }
 
-func (e *elasticsearchLogsExporter) Shutdown(ctx context.Context) error {
+func (e *elasticsearchMetricsExporter) Shutdown(ctx context.Context) error {
 	return e.bulkIndexer.Close(ctx)
 }
 
-func (e *elasticsearchLogsExporter) pushLogsData(ctx context.Context, ld plog.Logs) error {
+func (e *elasticsearchMetricsExporter) pushMetricsData(ctx context.Context, ld pmetric.Metrics) error {
 	var errs []error
 
-	rls := ld.ResourceLogs()
+	rls := ld.ResourceMetrics()
 	for i := 0; i < rls.Len(); i++ {
 		rl := rls.At(i)
 		resource := rl.Resource()
-		ills := rl.ScopeLogs()
+		ills := rl.ScopeMetrics()
 		for j := 0; j < ills.Len(); j++ {
 			scope := ills.At(j).Scope()
-			logs := ills.At(j).LogRecords()
-			for k := 0; k < logs.Len(); k++ {
-				if err := e.pushLogRecord(ctx, resource, logs.At(k), scope); err != nil {
-					if cerr := ctx.Err(); cerr != nil {
-						return cerr
-					}
+			metrics := ills.At(j).Metrics()
 
-					errs = append(errs, err)
+			if err := e.pushMetricRecord(ctx, resource, metrics, scope); err != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return cerr
 				}
+
+				errs = append(errs, err)
 			}
+
 		}
 	}
 
 	return errors.Join(errs...)
 }
 
-func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) error {
+func (e *elasticsearchMetricsExporter) pushMetricRecord(ctx context.Context, resource pcommon.Resource, slice pmetric.MetricSlice, scope pcommon.InstrumentationScope) error {
 	fIndex := e.index
 	if e.dynamicIndex {
 		if e.dynamicIndexMode == "prefix_suffix" {
-			prefix := getStrFromAttributes(indexPrefix, "", resource.Attributes(), record.Attributes())
-			suffix := getStrFromAttributes(indexSuffix, "", resource.Attributes(), record.Attributes())
+			prefix := getStrFromAttributes(indexPrefix, "", resource.Attributes())
+			suffix := getStrFromAttributes(indexSuffix, "", resource.Attributes())
 
 			fIndex = fmt.Sprintf("%s%s%s", prefix, fIndex, suffix)
 		} else if e.dynamicIndexMode == "data_stream" {
-			dsDataset := getStrFromAttributes(dataStreamDataset, defaultDataStreamDataset, resource.Attributes(), record.Attributes())
-			dsNamespace := getStrFromAttributes(dataStreamNamespace, defaultDataStreamNamespace, resource.Attributes(), record.Attributes())
+			dsDataset := getStrFromAttributes(dataStreamDataset, defaultDataStreamDataset, resource.Attributes())
+			dsNamespace := getStrFromAttributes(dataStreamNamespace, defaultDataStreamNamespace, resource.Attributes())
 
 			fIndex = fmt.Sprintf("%s-%s-%s", "logs", dsDataset, dsNamespace)
 		} else {
@@ -132,17 +125,17 @@ func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource 
 		}
 	}
 
-	if e.logstashFormat.Enabled {
-		formattedIndex, err := generateIndexWithLogstashFormat(fIndex, &e.logstashFormat, time.Now())
+	documents, err := e.model.encodeMetrics(resource, slice, scope)
+	if err != nil {
+		return fmt.Errorf("failed to encode metric event: %w", err)
+	}
+
+	for _, document := range documents {
+		err := pushDocuments(ctx, e.logger, fIndex, document, e.bulkIndexer, e.maxAttempts)
 		if err != nil {
 			return err
 		}
-		fIndex = formattedIndex
 	}
 
-	document, err := e.model.encodeLog(resource, record, scope)
-	if err != nil {
-		return fmt.Errorf("Failed to encode log event: %w", err)
-	}
-	return pushDocuments(ctx, e.logger, fIndex, document, e.bulkIndexer, e.maxAttempts)
+	return nil
 }
