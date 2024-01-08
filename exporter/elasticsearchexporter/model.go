@@ -139,7 +139,7 @@ func metricHash(h hash.Hash, t pcommon.Timestamp, attrs pcommon.Map) string {
 func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.MetricSlice, scope pcommon.InstrumentationScope) ([][]byte, error) {
 	hasher := sha256.New()
 	var baseDoc objmodel.Document
-	baseDoc.AddAttributes("", resource.Attributes())
+	baseDoc.AddAttributes("", resource.Attributes()) // TODO: pre-serialize the shared fields and copy them to each document
 
 	docs := map[string]*objmodel.Document{}
 
@@ -171,10 +171,8 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 
 			switch dp.ValueType() {
 			case pmetric.NumberDataPointValueTypeDouble:
-				// doc.Add(m.Name(), objmodel.DoubleValue(dp.DoubleValue()))
 				doc.AddAttribute(m.Name(), pcommon.NewValueDouble(dp.DoubleValue()))
 			case pmetric.NumberDataPointValueTypeInt:
-				// doc.Add(m.Name(), objmodel.IntValue(dp.IntValue()))
 				doc.AddAttribute(m.Name(), pcommon.NewValueInt(dp.IntValue()))
 			}
 		}
@@ -184,15 +182,17 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 
 	for _, doc := range docs {
 		var buf bytes.Buffer
-		if m.dedot {
-			doc.Sort() // Necessary to avoid duplicate object keys
+		if m.dedup {
+			doc.Dedup()
+		} else if m.dedot {
+			doc.Sort()
 		}
 		err := doc.Serialize(&buf, m.dedot) // TODO: handle err
 		if err != nil {
-			fmt.Printf("Serialize error: %v\n", err)
+			fmt.Printf("Serialize error, dropping doc: %v\n", err)
+		} else {
+			res = append(res, buf.Bytes())
 		}
-		fmt.Printf("Serialize: %v\n", buf.String())
-		res = append(res, buf.Bytes())
 	}
 
 	return res, nil

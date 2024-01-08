@@ -119,7 +119,7 @@ func (e *elasticsearchMetricsExporter) pushMetricRecord(ctx context.Context, res
 			dsDataset := getStrFromAttributes(dataStreamDataset, defaultDataStreamDataset, resource.Attributes())
 			dsNamespace := getStrFromAttributes(dataStreamNamespace, defaultDataStreamNamespace, resource.Attributes())
 
-			fIndex = fmt.Sprintf("%s-%s-%s", "logs", dsDataset, dsNamespace)
+			fIndex = fmt.Sprintf("%s-%s-%s", "metrics", dsDataset, dsNamespace)
 		} else {
 			return fmt.Errorf("unknown dynamic index mode: %s", e.dynamicIndexMode)
 		}
