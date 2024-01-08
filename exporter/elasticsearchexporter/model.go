@@ -184,10 +184,14 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 
 	for _, doc := range docs {
 		var buf bytes.Buffer
+		if m.dedot {
+			doc.Sort() // Necessary to avoid duplicate object keys
+		}
 		err := doc.Serialize(&buf, m.dedot) // TODO: handle err
 		if err != nil {
 			fmt.Printf("Serialize error: %v\n", err)
 		}
+		fmt.Printf("Serialize: %v\n", buf.String())
 		res = append(res, buf.Bytes())
 	}
 
