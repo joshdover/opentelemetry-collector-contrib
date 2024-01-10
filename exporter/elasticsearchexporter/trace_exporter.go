@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -19,10 +20,12 @@ import (
 type elasticsearchTracesExporter struct {
 	logger *zap.Logger
 
-	index          string
-	logstashFormat LogstashFormatSettings
-	dynamicIndex   bool
-	maxAttempts    int
+	index            string
+	logstashFormat   LogstashFormatSettings
+	dynamicIndex     bool
+	dynamicIndexMode string
+	mappingMode      string
+	maxAttempts      int
 
 	client      *esClientCurrent
 	bulkIndexer esBulkIndexerCurrent
@@ -51,16 +54,26 @@ func newTracesExporter(logger *zap.Logger, cfg *Config) (*elasticsearchTracesExp
 
 	model := &encodeModel{dedup: cfg.Mapping.Dedup, dedot: cfg.Mapping.Dedot}
 
+	dynamicIndexMode := ""
+	switch cfg.LogsDynamicIndex.Mode {
+	case "":
+		dynamicIndexMode = "prefix_suffix"
+	case "data_stream":
+		dynamicIndexMode = "data_stream"
+	}
+
 	return &elasticsearchTracesExporter{
 		logger:      logger,
 		client:      client,
 		bulkIndexer: bulkIndexer,
 
-		index:          cfg.TracesIndex,
-		dynamicIndex:   cfg.TracesDynamicIndex.Enabled,
-		maxAttempts:    maxAttempts,
-		model:          model,
-		logstashFormat: cfg.LogstashFormat,
+		index:            cfg.TracesIndex,
+		dynamicIndex:     cfg.TracesDynamicIndex.Enabled,
+		dynamicIndexMode: dynamicIndexMode,
+		mappingMode:      cfg.Mapping.Mode,
+		maxAttempts:      maxAttempts,
+		model:            model,
+		logstashFormat:   cfg.LogstashFormat,
 	}, nil
 }
 
@@ -98,10 +111,28 @@ func (e *elasticsearchTracesExporter) pushTraceData(
 func (e *elasticsearchTracesExporter) pushTraceRecord(ctx context.Context, resource pcommon.Resource, span ptrace.Span, scope pcommon.InstrumentationScope) error {
 	fIndex := e.index
 	if e.dynamicIndex {
-		prefix := getStrFromAttributes(indexPrefix, "", resource.Attributes(), span.Attributes())
-		suffix := getStrFromAttributes(indexSuffix, "", resource.Attributes(), span.Attributes())
+		if e.dynamicIndexMode == "prefix_suffix" {
+			prefix := getStrFromAttributes(indexPrefix, "", resource.Attributes())
+			suffix := getStrFromAttributes(indexSuffix, "", resource.Attributes())
 
-		fIndex = fmt.Sprintf("%s%s%s", prefix, fIndex, suffix)
+			fIndex = fmt.Sprintf("%s%s%s", prefix, fIndex, suffix)
+		} else if e.dynamicIndexMode == "data_stream" {
+			dsDataset := getStrFromAttributes(dataStreamDataset, defaultDataStreamDataset, resource.Attributes())
+			dsNamespace := getStrFromAttributes(dataStreamNamespace, defaultDataStreamNamespace, resource.Attributes())
+
+			if e.mappingMode == "otel" {
+				// Otel mapping mode requires otel.* prefix for dataset
+				if !strings.HasPrefix(dsDataset, "otel.") {
+					dsDataset = "otel." + dsDataset
+				}
+
+				fIndex = fmt.Sprintf("%s-%s-%s", "traces", dsDataset, dsNamespace)
+			} else {
+				fIndex = fmt.Sprintf("%s-%s-%s", "traces", dsDataset, dsNamespace)
+			}
+		} else {
+			return fmt.Errorf("unknown dynamic index mode: %s", e.dynamicIndexMode)
+		}
 	}
 
 	if e.logstashFormat.Enabled {
@@ -114,7 +145,7 @@ func (e *elasticsearchTracesExporter) pushTraceRecord(ctx context.Context, resou
 
 	document, err := e.model.encodeSpan(resource, span, scope)
 	if err != nil {
-		return fmt.Errorf("Failed to encode trace record: %w", err)
+		return fmt.Errorf("failed to encode trace record: %w", err)
 	}
 	return pushDocuments(ctx, e.logger, fIndex, document, e.bulkIndexer, e.maxAttempts)
 }

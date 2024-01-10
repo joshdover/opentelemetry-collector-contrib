@@ -69,15 +69,19 @@ func encodeResourceAndScopeAttributes(doc *objmodel.Document, resource pcommon.R
 	doc.AddAttributes("", m)
 }
 
+func encodeAttributes(doc *objmodel.Document, attr pcommon.Map) {
+	a := pcommon.NewMap()
+	attr.CopyTo(a.PutEmptyMap("attributes"))
+	doc.AddAttributes("", a)
+}
+
 func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) ([]byte, error) {
 	var document objmodel.Document
 	document.AddTimestamp("@timestamp", record.Timestamp()) // We use @timestamp in order to ensure that we can index if the default data stream logs template is used.
 	document.AddTimestamp("observed_timestamp", record.ObservedTimestamp())
 
 	if m.mapping == MappingOTel.String() {
-		a := pcommon.NewMap()
-		record.Attributes().CopyTo(a.PutEmptyMap("attributes"))
-		document.AddAttributes("", a)
+		encodeAttributes(&document, record.Attributes())
 		encodeResourceAndScopeAttributes(&document, resource, scope)
 
 		document.AddTraceID("trace_id", record.TraceID())
@@ -211,9 +215,7 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 				d := baseDoc.Clone()
 				d.AddTimestamp("@timestamp", dp.Timestamp())
 				if m.mapping == MappingOTel.String() {
-					a := pcommon.NewMap()
-					dp.Attributes().CopyTo(a.PutEmptyMap("attributes"))
-					d.AddAttributes("", a)
+					encodeAttributes(&d, dp.Attributes())
 				} else {
 					d.AddAttributes("", dp.Attributes())
 				}
@@ -272,30 +274,53 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 func (m *encodeModel) encodeSpan(resource pcommon.Resource, span ptrace.Span, scope pcommon.InstrumentationScope) ([]byte, error) {
 	var document objmodel.Document
 	document.AddTimestamp("@timestamp", span.StartTimestamp()) // We use @timestamp in order to ensure that we can index if the default data stream logs template is used.
-	document.AddTimestamp("EndTimestamp", span.EndTimestamp())
-	document.AddTraceID("TraceId", span.TraceID())
-	document.AddSpanID("SpanId", span.SpanID())
-	document.AddSpanID("ParentSpanId", span.ParentSpanID())
-	document.AddString("Name", span.Name())
-	document.AddString("Kind", traceutil.SpanKindStr(span.Kind()))
-	document.AddInt("TraceStatus", int64(span.Status().Code()))
-	document.AddString("TraceStatusDescription", span.Status().Message())
-	document.AddString("Link", spanLinksToString(span.Links()))
-	document.AddAttributes("Attributes", span.Attributes())
-	document.AddAttributes("Resource", resource.Attributes())
-	document.AddEvents("Events", span.Events())
-	document.AddInt("Duration", durationAsMicroseconds(span.StartTimestamp().AsTime(), span.EndTimestamp().AsTime())) // unit is microseconds
-	document.AddAttributes("Scope", scopeToAttributes(scope))
 
-	if m.dedup {
-		document.Dedup()
-	} else if m.dedot {
-		document.Sort()
+	if m.mapping == MappingOTel.String() {
+		document.AddInt("duration", span.EndTimestamp().AsTime().Sub(span.StartTimestamp().AsTime()).Nanoseconds())
+		document.AddString("kind", traceutil.SpanKindStr(span.Kind()))
+		document.AddString("name", span.Name())
+		document.AddString("status", span.Status().Message())
+		// TODO: span links
+		document.AddSpanID("span_id", span.SpanID())
+		document.AddTraceID("trace_id", span.TraceID())
+		document.AddString("trace_state", span.TraceState().AsRaw())
+		document.AddSpanID("parent_span_id", span.ParentSpanID())
+
+		encodeResourceAndScopeAttributes(&document, resource, scope)
+		encodeAttributes(&document, span.Attributes())
+
+	} else {
+		document.AddTimestamp("EndTimestamp", span.EndTimestamp())
+		document.AddTraceID("TraceId", span.TraceID())
+		document.AddSpanID("SpanId", span.SpanID())
+		document.AddSpanID("ParentSpanId", span.ParentSpanID())
+		document.AddString("Name", span.Name())
+		document.AddString("Kind", traceutil.SpanKindStr(span.Kind()))
+		document.AddInt("TraceStatus", int64(span.Status().Code()))
+		document.AddString("TraceStatusDescription", span.Status().Message())
+		document.AddString("Link", spanLinksToString(span.Links()))
+		document.AddAttributes("Attributes", span.Attributes())
+		document.AddAttributes("Resource", resource.Attributes())
+		document.AddEvents("Events", span.Events())
+		document.AddInt("Duration", durationAsMicroseconds(span.StartTimestamp().AsTime(), span.EndTimestamp().AsTime())) // unit is microseconds
+		document.AddAttributes("Scope", scopeToAttributes(scope))
 	}
 
-	var buf bytes.Buffer
-	err := document.Serialize(&buf, m.dedot)
-	return buf.Bytes(), err
+	if m.mapping == MappingOTel.String() {
+		if m.dedup {
+			document.Dedup()
+		} else if m.dedot {
+			document.Sort()
+		}
+
+		var buf bytes.Buffer
+		err := document.Serialize(&buf, m.dedot)
+		return buf.Bytes(), err
+	} else {
+		var buf bytes.Buffer
+		err := document.Serialize(&buf, false)
+		return buf.Bytes(), err
+	}
 }
 
 func spanLinksToString(spanLinkSlice ptrace.SpanLinkSlice) string {
