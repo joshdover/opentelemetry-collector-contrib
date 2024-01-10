@@ -126,6 +126,9 @@ func (e *elasticsearchMetricsExporter) pushMetricRecord(ctx context.Context, res
 				// Otel mapping mode requires otel.* prefix for dataset
 				if !strings.HasPrefix(dsDataset, "otel.") {
 					dsDataset = "otel." + dsDataset
+					// Update resource to keep fields in sync with data stream name
+					// currently assume that it was set on resource
+					resource.Attributes().PutStr("data_stream.dataset", dsDataset)
 				}
 
 				fIndex = fmt.Sprintf("%s-%s-%s", "metrics", dsDataset, dsNamespace)
