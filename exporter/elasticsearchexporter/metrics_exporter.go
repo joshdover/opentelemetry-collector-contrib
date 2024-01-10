@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -21,6 +22,7 @@ type elasticsearchMetricsExporter struct {
 	index            string
 	dynamicIndex     bool
 	dynamicIndexMode string
+	mappingMode      string
 	maxAttempts      int
 
 	client      *esClientCurrent
@@ -71,6 +73,7 @@ func newMetricsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchMetricsE
 		index:            indexStr,
 		dynamicIndex:     cfg.MetricsDynamicIndex.Enabled,
 		dynamicIndexMode: dynamicIndexMode,
+		mappingMode:      cfg.Mapping.Mode,
 		maxAttempts:      maxAttempts,
 		model:            model,
 	}
@@ -119,7 +122,16 @@ func (e *elasticsearchMetricsExporter) pushMetricRecord(ctx context.Context, res
 			dsDataset := getStrFromAttributes(dataStreamDataset, defaultDataStreamDataset, resource.Attributes())
 			dsNamespace := getStrFromAttributes(dataStreamNamespace, defaultDataStreamNamespace, resource.Attributes())
 
-			fIndex = fmt.Sprintf("%s-%s-%s", "metrics", dsDataset, dsNamespace)
+			if e.mappingMode == "otel" {
+				// Otel mapping mode requires otel.* prefix for dataset
+				if !strings.HasPrefix(dsDataset, "otel.") {
+					dsDataset = "otel." + dsDataset
+				}
+
+				fIndex = fmt.Sprintf("%s-%s-%s", "metrics", dsDataset, dsNamespace)
+			} else {
+				fIndex = fmt.Sprintf("%s-%s-%s", "metrics", dsDataset, dsNamespace)
+			}
 		} else {
 			return fmt.Errorf("unknown dynamic index mode: %s", e.dynamicIndexMode)
 		}

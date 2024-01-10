@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -23,6 +24,7 @@ type elasticsearchLogsExporter struct {
 	logstashFormat   LogstashFormatSettings
 	dynamicIndex     bool
 	dynamicIndexMode string
+	mappingMode      string
 	maxAttempts      int
 
 	client      *esClientCurrent
@@ -77,6 +79,7 @@ func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporte
 		index:            indexStr,
 		dynamicIndex:     cfg.LogsDynamicIndex.Enabled,
 		dynamicIndexMode: dynamicIndexMode,
+		mappingMode:      cfg.Mapping.Mode,
 		maxAttempts:      maxAttempts,
 		model:            model,
 		logstashFormat:   cfg.LogstashFormat,
@@ -126,7 +129,16 @@ func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource 
 			dsDataset := getStrFromAttributes(dataStreamDataset, defaultDataStreamDataset, resource.Attributes(), record.Attributes())
 			dsNamespace := getStrFromAttributes(dataStreamNamespace, defaultDataStreamNamespace, resource.Attributes(), record.Attributes())
 
-			fIndex = fmt.Sprintf("%s-%s-%s", "logs", dsDataset, dsNamespace)
+			if e.mappingMode == "otel" {
+				// Otel mapping mode requires otel.* prefix for dataset
+				if !strings.HasPrefix(dsDataset, "otel.") {
+					dsDataset = "otel." + dsDataset
+				}
+
+				fIndex = fmt.Sprintf("%s-%s-%s", "logs", dsDataset, dsNamespace)
+			} else {
+				fIndex = fmt.Sprintf("%s-%s-%s", "logs", dsDataset, dsNamespace)
+			}
 		} else {
 			return fmt.Errorf("unknown dynamic index mode: %s", e.dynamicIndexMode)
 		}
@@ -142,7 +154,7 @@ func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource 
 
 	document, err := e.model.encodeLog(resource, record, scope)
 	if err != nil {
-		return fmt.Errorf("Failed to encode log event: %w", err)
+		return fmt.Errorf("failed to encode log event: %w", err)
 	}
 	return pushDocuments(ctx, e.logger, fIndex, document, e.bulkIndexer, e.maxAttempts)
 }
