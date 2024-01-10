@@ -148,6 +148,7 @@ func (e *elasticsearchMetricsExporter) pushMetricRecord(ctx context.Context, res
 			return err
 		}
 	}
+	e.logger.Sugar().Infof("Successfully pushed %d metric documents to Elasticsearch queue.", len(documents))
 
 	return nil
 }

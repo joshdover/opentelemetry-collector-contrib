@@ -46,11 +46,52 @@ const (
 	attributeField = "attribute"
 )
 
+// Adds resource.attributes.* and instrumentation_scope.* to the document
+// Only supports OTel mapping mode
+func encodeResourceAndScopeAttributes(doc *objmodel.Document, resource pcommon.Resource, scope pcommon.InstrumentationScope) {
+	m := pcommon.NewMap()
+
+
+	r := m.PutEmptyMap("resource")
+	ra := r.PutEmptyMap("attributes")
+	resource.Attributes().CopyTo(ra)
+	r.PutInt("dropped_attributes_count", int64(resource.DroppedAttributesCount()))
+	// doc.AddAttributes("resource", r)
+
+	// s := pcommon.NewMap()
+	s := m.PutEmptyMap("instrumentation_scope")
+	s.PutStr("name", scope.Name())
+	s.PutStr("version", scope.Version())
+	sa := s.PutEmptyMap("attributes")
+	scope.Attributes().CopyTo(sa)
+	s.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
+
+	doc.AddAttributes("", m)
+}
+
 func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) ([]byte, error) {
 	var document objmodel.Document
 	document.AddTimestamp("@timestamp", record.Timestamp()) // We use @timestamp in order to ensure that we can index if the default data stream logs template is used.
+	document.AddTimestamp("observed_timestamp", record.ObservedTimestamp())
 
-	if m.mapping == MappingECS.String() {
+	if m.mapping == MappingOTel.String() {
+		a := pcommon.NewMap()
+		record.Attributes().CopyTo(a.PutEmptyMap("attributes"))
+		document.AddAttributes("", a)
+		encodeResourceAndScopeAttributes(&document, resource, scope)
+
+		document.AddTraceID("trace_id", record.TraceID())
+		document.AddSpanID("span_id", record.SpanID())
+		// document.AddByte("trace_flags", int64(record.Flags())) // TODO
+		document.AddString("log.level", record.SeverityText())
+		document.AddInt("log.level_number", int64(record.SeverityNumber()))
+		document.AddAttribute("message", record.Body())
+
+		// skip dedot and dedup
+		var buf bytes.Buffer
+		err := document.Serialize(&buf, false)
+		return buf.Bytes(), err
+	} else if m.mapping == MappingECS.String() {
 		/* Add message first and overwrite it from the record if present */
 		document.AddAttribute("message", record.Body())
 
@@ -139,55 +180,85 @@ func metricHash(h hash.Hash, t pcommon.Timestamp, attrs pcommon.Map) string {
 func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.MetricSlice, scope pcommon.InstrumentationScope) ([][]byte, error) {
 	hasher := sha256.New()
 	var baseDoc objmodel.Document
-	baseDoc.AddAttributes("", resource.Attributes()) // TODO: pre-serialize the shared fields and copy them to each document
 
-	docs := map[string]*objmodel.Document{}
+	if m.mapping == MappingOTel.String() {
+		encodeResourceAndScopeAttributes(&baseDoc, resource, scope)
+	} else {
+		baseDoc.AddAttributes("", resource.Attributes())
+	}
+
+	docsByHash := map[string]*objmodel.Document{}
 
 	for i := 0; i < metrics.Len(); i++ {
-		m := metrics.At(i)
+		mt := metrics.At(i)
 
 		var dps pmetric.NumberDataPointSlice
 
 		// TODO: support more metric types
-		switch m.Type() {
+		switch mt.Type() {
 		case pmetric.MetricTypeGauge:
-			dps = m.Gauge().DataPoints()
+			dps = mt.Gauge().DataPoints()
 		case pmetric.MetricTypeSum:
-			dps = m.Sum().DataPoints()
+			dps = mt.Sum().DataPoints()
 		}
 
 		for j := 0; j < dps.Len(); j++ {
 			dp := dps.At(j)
 
 			hash := metricHash(hasher, dp.Timestamp(), dp.Attributes())
-			doc, ok := docs[hash]
+			doc, ok := docsByHash[hash]
 			if !ok {
 				d := baseDoc.Clone()
 				d.AddTimestamp("@timestamp", dp.Timestamp())
-				d.AddAttributes("", dp.Attributes())
-				docs[hash] = &d
+				if m.mapping == MappingOTel.String() {
+					a := pcommon.NewMap()
+					dp.Attributes().CopyTo(a.PutEmptyMap("attributes"))
+					d.AddAttributes("", a)
+				} else {
+					d.AddAttributes("", dp.Attributes())
+				}
+				docsByHash[hash] = &d
 				doc = &d
 			}
 
 			switch dp.ValueType() {
 			case pmetric.NumberDataPointValueTypeDouble:
-				doc.AddAttribute(m.Name(), pcommon.NewValueDouble(dp.DoubleValue()))
+				if m.mapping == MappingOTel.String() {
+					mm := pcommon.NewMap()
+					mm.PutEmptyMap("metrics").PutDouble(mt.Name(), dp.DoubleValue())
+					doc.AddAttributes("", mm)
+				} else {
+					doc.AddAttribute(mt.Name(), pcommon.NewValueDouble(dp.DoubleValue()))
+				}
 			case pmetric.NumberDataPointValueTypeInt:
-				doc.AddAttribute(m.Name(), pcommon.NewValueInt(dp.IntValue()))
+				if m.mapping == MappingOTel.String() {
+					mm := pcommon.NewMap()
+					mm.PutEmptyMap("metrics").PutInt(mt.Name(), dp.IntValue())
+					doc.AddAttributes("", mm)
+				} else {
+					doc.AddAttribute(mt.Name(), pcommon.NewValueInt(dp.IntValue()))
+				}
 			}
 		}
 	}
 
-	res := make([][]byte, 0, len(docs))
+	res := make([][]byte, 0, len(docsByHash))
 
-	for _, doc := range docs {
+	for _, doc := range docsByHash {
 		var buf bytes.Buffer
-		if m.dedup {
-			doc.Dedup()
-		} else if m.dedot {
-			doc.Sort()
+		var err error
+
+		if m.mapping != MappingOTel.String() {
+			if m.dedup {
+				doc.Dedup()
+			} else if m.dedot {
+				doc.Sort()
+			}
+			err = doc.Serialize(&buf, m.dedot)
+		} else {
+			err = doc.Serialize(&buf, false)
 		}
-		err := doc.Serialize(&buf, m.dedot) // TODO: handle err
+
 		if err != nil {
 			fmt.Printf("Serialize error, dropping doc: %v\n", err)
 		} else {
