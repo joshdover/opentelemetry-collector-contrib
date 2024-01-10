@@ -86,15 +86,10 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 
 		document.AddTraceID("trace_id", record.TraceID())
 		document.AddSpanID("span_id", record.SpanID())
-		// document.AddByte("trace_flags", int64(record.Flags())) // TODO
+		document.AddInt("trace_flags", int64(record.Flags()))
 		document.AddString("log.level", record.SeverityText())
 		document.AddInt("log.level_number", int64(record.SeverityNumber()))
 		document.AddAttribute("message", record.Body())
-
-		// skip dedot and dedup
-		var buf bytes.Buffer
-		err := document.Serialize(&buf, false)
-		return buf.Bytes(), err
 	} else if m.mapping == MappingECS.String() {
 		/* Add message first and overwrite it from the record if present */
 		document.AddAttribute("message", record.Body())
@@ -118,12 +113,12 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 
 	if m.dedup {
 		document.Dedup()
-	} else if m.dedot {
+	} else if m.dedot && m.mapping != MappingOTel.String() {
 		document.Sort()
 	}
 
 	var buf bytes.Buffer
-	err := document.Serialize(&buf, m.dedot)
+	err := document.Serialize(&buf, m.mapping != MappingOTel.String() && m.dedot)
 	return buf.Bytes(), err
 }
 
@@ -247,19 +242,14 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 	res := make([][]byte, 0, len(docsByHash))
 
 	for _, doc := range docsByHash {
-		var buf bytes.Buffer
-		var err error
-
-		if m.mapping != MappingOTel.String() {
-			if m.dedup {
-				doc.Dedup()
-			} else if m.dedot {
-				doc.Sort()
-			}
-			err = doc.Serialize(&buf, m.dedot)
-		} else {
-			err = doc.Serialize(&buf, false)
+		if m.dedup {
+			doc.Dedup()
+		} else if m.dedot && m.mapping != MappingOTel.String() {
+			doc.Sort()
 		}
+	
+		var buf bytes.Buffer
+		err := doc.Serialize(&buf, m.mapping != MappingOTel.String() && m.dedot)
 
 		if err != nil {
 			fmt.Printf("Serialize error, dropping doc: %v\n", err)
@@ -280,11 +270,12 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, span ptrace.Span, sc
 		document.AddString("kind", traceutil.SpanKindStr(span.Kind()))
 		document.AddString("name", span.Name())
 		document.AddString("status", span.Status().Message())
-		// TODO: span links
 		document.AddSpanID("span_id", span.SpanID())
 		document.AddTraceID("trace_id", span.TraceID())
 		document.AddString("trace_state", span.TraceState().AsRaw())
 		document.AddSpanID("parent_span_id", span.ParentSpanID())
+		// TODO: span links
+		// TODO: span events
 
 		encodeResourceAndScopeAttributes(&document, resource, scope)
 		encodeAttributes(&document, span.Attributes())
@@ -306,21 +297,15 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, span ptrace.Span, sc
 		document.AddAttributes("Scope", scopeToAttributes(scope))
 	}
 
-	if m.mapping == MappingOTel.String() {
-		if m.dedup {
-			document.Dedup()
-		} else if m.dedot {
-			document.Sort()
-		}
-
-		var buf bytes.Buffer
-		err := document.Serialize(&buf, m.dedot)
-		return buf.Bytes(), err
-	} else {
-		var buf bytes.Buffer
-		err := document.Serialize(&buf, false)
-		return buf.Bytes(), err
+	if m.dedup {
+		document.Dedup()
+	} else if m.dedot && m.mapping != MappingOTel.String() {
+		document.Sort()
 	}
+
+	var buf bytes.Buffer
+	err := document.Serialize(&buf, m.mapping != MappingOTel.String() && m.dedot)
+	return buf.Bytes(), err
 }
 
 func spanLinksToString(spanLinkSlice ptrace.SpanLinkSlice) string {

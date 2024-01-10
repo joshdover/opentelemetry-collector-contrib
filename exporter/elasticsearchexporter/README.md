@@ -68,6 +68,7 @@ This exporter supports sending OpenTelemetry logs to [Elasticsearch](https://www
     - `ecs`: Try to map fields defined in the
              [OpenTelemetry Semantic Conventions](https://github.com/open-telemetry/semantic-conventions)
              to [Elastic Common Schema (ECS)](https://www.elastic.co/guide/en/ecs/current/index.html).
+    - `otel`: Uses Elastic's preferred otel schema
   - `fields` (optional): Configure additional fields mappings.
   - `file` (optional): Read additional field mappings from the provided YAML file.
   - `dedup` (default=true): Try to find and remove duplicate fields/attributes
