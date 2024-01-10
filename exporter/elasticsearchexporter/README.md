@@ -76,7 +76,7 @@ This exporter supports sending OpenTelemetry logs to [Elasticsearch](https://www
     libraries can produce duplicate fields (for example zap). Elasticsearch
     will reject documents that have duplicate fields.
   - `dedot` (default=true): When enabled attributes with `.` will be split into
-    proper json objects.
+    proper json objects. Ignored when `mapping.mode: otel`.
 - `sending_queue`
   - `enabled` (default = false)
   - `num_consumers` (default = 10): Number of consumers that dequeue batches; ignored if `enabled` is `false`

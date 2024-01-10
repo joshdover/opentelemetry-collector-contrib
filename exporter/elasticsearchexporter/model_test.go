@@ -72,12 +72,12 @@ func mockResourceSpans() ptrace.Traces {
 }
 
 var (
-	expectedMetricDoc1 = `{"cloud.provider":"aws","cloud.platform":"aws_elastic_beanstalk","@timestamp":"2023-04-19T03:04:05.000000006Z","state":"user","core":"0","system.cpu.utilization":0.1,"system.cpu.time":100}`
-	expectedMetricDoc2 = `{"cloud.provider":"aws","cloud.platform":"aws_elastic_beanstalk","@timestamp":"2023-04-19T03:04:05.000000006Z","state":"user","core":"1","system.cpu.utilization":0.2,"system.cpu.time":200}`
-	expectedMetricDoc3 = `{"cloud.provider":"aws","cloud.platform":"aws_elastic_beanstalk","@timestamp":"2023-04-19T03:04:35.000000006Z","state":"user","core":"0","system.cpu.utilization":0.3,"system.cpu.time":300}`
+	expMetricEcsDoc1 = `{"@timestamp":"2023-04-19T03:04:05.000000006Z","cloud.platform":"aws_elastic_beanstalk","cloud.provider":"aws","core":"0","state":"user","system.cpu.time":100,"system.cpu.utilization":0.1}`
+	expMetricEcsDoc2 = `{"@timestamp":"2023-04-19T03:04:05.000000006Z","cloud.platform":"aws_elastic_beanstalk","cloud.provider":"aws","core":"1","state":"user","system.cpu.time":200,"system.cpu.utilization":0.2}`
+	expMetricEcsDoc3 = `{"@timestamp":"2023-04-19T03:04:35.000000006Z","cloud.platform":"aws_elastic_beanstalk","cloud.provider":"aws","core":"0","state":"user","system.cpu.time":300,"system.cpu.utilization":0.3}`
 )
 
-func TestEncodeMetric(t *testing.T) {
+func TestEncodeMetricEcs(t *testing.T) {
 	model := &encodeModel{dedup: true, dedot: false}
 	md := mockMetrics()
 	sm := md.ResourceMetrics().At(0).ScopeMetrics().At(0)
@@ -92,7 +92,31 @@ func TestEncodeMetric(t *testing.T) {
 		mbStrs[i] = string(mb)
 	}
 
-	assert.ElementsMatch(t, []string{expectedMetricDoc1, expectedMetricDoc2, expectedMetricDoc3}, mbStrs)
+	assert.ElementsMatch(t, []string{expMetricEcsDoc1, expMetricEcsDoc2, expMetricEcsDoc3}, mbStrs)
+}
+
+var (
+	expMetricOtelDoc1 = `{"@timestamp":"2023-04-19T03:04:05.000000006Z","attributes":{"core":"0","state":"user"},"instrumentation_scope":{"dropped_attribute_count":0,"name":"","version":""},"metrics":{"system.cpu.time":100,"system.cpu.utilization":0.1},"resource":{"attributes":{"cloud.platform":"aws_elastic_beanstalk","cloud.provider":"aws"},"dropped_attribute_count":0}}`
+	expMetricOtelDoc2 = `{"@timestamp":"2023-04-19T03:04:05.000000006Z","attributes":{"core":"1","state":"user"},"instrumentation_scope":{"dropped_attribute_count":0,"name":"","version":""},"metrics":{"system.cpu.time":200,"system.cpu.utilization":0.2},"resource":{"attributes":{"cloud.platform":"aws_elastic_beanstalk","cloud.provider":"aws"},"dropped_attribute_count":0}}`
+	expMetricOtelDoc3 = `{"@timestamp":"2023-04-19T03:04:35.000000006Z","attributes":{"core":"0","state":"user"},"instrumentation_scope":{"dropped_attribute_count":0,"name":"","version":""},"metrics":{"system.cpu.time":300,"system.cpu.utilization":0.3},"resource":{"attributes":{"cloud.platform":"aws_elastic_beanstalk","cloud.provider":"aws"},"dropped_attribute_count":0}}`
+)
+
+func TestEncodeMetricOtel(t *testing.T) {
+	model := &encodeModel{dedup: true, dedot: false, mapping: "otel"}
+	md := mockMetrics()
+	sm := md.ResourceMetrics().At(0).ScopeMetrics().At(0)
+	metricBytes, err := model.encodeMetrics(md.ResourceMetrics().At(0).Resource(), sm.Metrics(), sm.Scope())
+	assert.NoError(t, err)
+
+	assert.Equal(t, 3, len(metricBytes))
+
+	// convert to strings to make strings easier to compare in case of failure
+	mbStrs := make([]string, len(metricBytes))
+	for i, mb := range metricBytes {
+		mbStrs[i] = string(mb)
+	}
+
+	assert.ElementsMatch(t, []string{expMetricOtelDoc1, expMetricOtelDoc2, expMetricOtelDoc3}, mbStrs)
 }
 
 func mockMetrics() pmetric.Metrics {

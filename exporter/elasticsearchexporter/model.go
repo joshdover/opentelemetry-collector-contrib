@@ -53,9 +53,9 @@ func encodeResourceAndScopeAttributes(doc *objmodel.Document, resource pcommon.R
 
 
 	r := m.PutEmptyMap("resource")
+	r.PutInt("dropped_attributes_count", int64(resource.DroppedAttributesCount()))
 	ra := r.PutEmptyMap("attributes")
 	resource.Attributes().CopyTo(ra)
-	r.PutInt("dropped_attributes_count", int64(resource.DroppedAttributesCount()))
 	// doc.AddAttributes("resource", r)
 
 	// s := pcommon.NewMap()
@@ -69,9 +69,14 @@ func encodeResourceAndScopeAttributes(doc *objmodel.Document, resource pcommon.R
 	doc.AddAttributes("", m)
 }
 
-func encodeAttributes(doc *objmodel.Document, attr pcommon.Map) {
+// if droppedCount is negative (invalid), then the dropped_attributes_count field is not added
+func encodeAttributes(doc *objmodel.Document, attr pcommon.Map, droppedCount int) {
 	a := pcommon.NewMap()
-	attr.CopyTo(a.PutEmptyMap("attributes"))
+	if droppedCount >= 0 {
+		a.PutInt("dropped_attributes_count", int64(droppedCount))
+	}
+	aa := a.PutEmptyMap("attributes")
+	attr.CopyTo(aa)
 	doc.AddAttributes("", a)
 }
 
@@ -81,7 +86,7 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 	document.AddTimestamp("observed_timestamp", record.ObservedTimestamp())
 
 	if m.mapping == MappingOTel.String() {
-		encodeAttributes(&document, record.Attributes())
+		encodeAttributes(&document, record.Attributes(), int(record.DroppedAttributesCount()))
 		encodeResourceAndScopeAttributes(&document, resource, scope)
 
 		document.AddTraceID("trace_id", record.TraceID())
@@ -187,6 +192,8 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 	}
 
 	docsByHash := map[string]*objmodel.Document{}
+	mFinalizers := []func(){}
+	mvalsByHash := map[string]*pcommon.Map{}
 
 	for i := 0; i < metrics.Len(); i++ {
 		mt := metrics.At(i)
@@ -204,16 +211,32 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 		for j := 0; j < dps.Len(); j++ {
 			dp := dps.At(j)
 
+			// TODO: Instead of hashing to match metrics, it would be faster if we just assumed that each resource metrics
+			// belong to the same document in ES internally in Agent from Beats' shipper output. Make this a configurable
+			// `document_merging_mode` option - maybe also dynamic based on resource attributes, like data_stream.* fields
+			// or OTTL expressions.
 			hash := metricHash(hasher, dp.Timestamp(), dp.Attributes())
 			doc, ok := docsByHash[hash]
+			mVals := mvalsByHash[hash]
 			if !ok {
 				d := baseDoc.Clone()
 				d.AddTimestamp("@timestamp", dp.Timestamp())
 				if m.mapping == MappingOTel.String() {
-					encodeAttributes(&d, dp.Attributes())
+					encodeAttributes(&d, dp.Attributes(), -1)
 				} else {
 					d.AddAttributes("", dp.Attributes())
 				}
+
+				if m.mapping == MappingOTel.String() {
+					mm := pcommon.NewMap()
+					mv := mm.PutEmptyMap("metrics")
+					mFinalizers = append(mFinalizers, func() {
+						d.AddAttributes("", mm)
+					})
+					mvalsByHash[hash] = &mv
+					mVals = &mv
+				}
+
 				docsByHash[hash] = &d
 				doc = &d
 			}
@@ -221,22 +244,22 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 			switch dp.ValueType() {
 			case pmetric.NumberDataPointValueTypeDouble:
 				if m.mapping == MappingOTel.String() {
-					mm := pcommon.NewMap()
-					mm.PutEmptyMap("metrics").PutDouble(mt.Name(), dp.DoubleValue())
-					doc.AddAttributes("", mm)
+					mVals.PutDouble(mt.Name(), dp.DoubleValue())
 				} else {
 					doc.AddAttribute(mt.Name(), pcommon.NewValueDouble(dp.DoubleValue()))
 				}
 			case pmetric.NumberDataPointValueTypeInt:
 				if m.mapping == MappingOTel.String() {
-					mm := pcommon.NewMap()
-					mm.PutEmptyMap("metrics").PutInt(mt.Name(), dp.IntValue())
-					doc.AddAttributes("", mm)
+					mVals.PutInt(mt.Name(), dp.IntValue())
 				} else {
 					doc.AddAttribute(mt.Name(), pcommon.NewValueInt(dp.IntValue()))
 				}
 			}
 		}
+	}
+
+	for _, f := range mFinalizers {
+		f()
 	}
 
 	res := make([][]byte, 0, len(docsByHash))
@@ -278,7 +301,7 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, span ptrace.Span, sc
 		// TODO: span events
 
 		encodeResourceAndScopeAttributes(&document, resource, scope)
-		encodeAttributes(&document, span.Attributes())
+		encodeAttributes(&document, span.Attributes(), int(span.DroppedAttributesCount()))
 
 	} else {
 		document.AddTimestamp("EndTimestamp", span.EndTimestamp())
