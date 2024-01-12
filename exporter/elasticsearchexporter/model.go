@@ -56,12 +56,20 @@ func encodeResourceAndScopeAttributes(doc *objmodel.Document, resource pcommon.R
 	ra := r.PutEmptyMap("attributes")
 	resource.Attributes().CopyTo(ra)
 
-	s := m.PutEmptyMap("instrumentation_scope")
-	s.PutStr("name", scope.Name())
-	s.PutStr("version", scope.Version())
-	sa := s.PutEmptyMap("attributes")
-	scope.Attributes().CopyTo(sa)
-	s.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
+	if scope.Name() != "" || scope.Version() != "" || scope.Attributes().Len() > 0 {
+		s := m.PutEmptyMap("instrumentation_scope")
+		if scope.Name() != "" {
+			s.PutStr("name", scope.Name())
+		}
+		if scope.Version() != "" {
+			s.PutStr("version", scope.Version())
+		}
+		if scope.Attributes().Len() > 0 {
+			sa := s.PutEmptyMap("attributes")
+			scope.Attributes().CopyTo(sa)
+			s.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
+		}
+	}
 
 	doc.AddAttributes("", m)
 }
