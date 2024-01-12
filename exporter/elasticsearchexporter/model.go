@@ -80,7 +80,10 @@ func encodeAttributes(doc *objmodel.Document, attr pcommon.Map, droppedCount int
 func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) ([]byte, error) {
 	var document objmodel.Document
 	document.AddTimestamp("@timestamp", record.Timestamp()) // We use @timestamp in order to ensure that we can index if the default data stream logs template is used.
-	document.AddTimestamp("observed_timestamp", record.ObservedTimestamp())
+
+	if record.ObservedTimestamp() > 0 {
+		document.AddTimestamp("observed_timestamp", record.ObservedTimestamp())
+	}
 
 	if m.mapping == MappingOTel.String() {
 		encodeAttributes(&document, record.Attributes(), int(record.DroppedAttributesCount()))
