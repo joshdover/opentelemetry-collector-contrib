@@ -108,6 +108,12 @@ func DocumentFromAttributesWithPath(path string, am pcommon.Map) Document {
 	return Document{fields}
 }
 
+func (doc *Document) Clone() Document {
+	fields := make([]field, len(doc.fields))
+	copy(fields, doc.fields)
+	return Document{fields}
+}
+
 // AddTimestamp adds a raw timestamp value to the Document.
 func (doc *Document) AddTimestamp(key string, ts pcommon.Timestamp) {
 	doc.Add(key, TimestampValue(ts.AsTime()))
@@ -270,7 +276,7 @@ func (doc *Document) iterJSONFlat(w *json.Visitor) error {
 			return err
 		}
 
-		if err := fld.value.iterJSON(w, true); err != nil {
+		if err := fld.value.iterJSON(w, false); err != nil {
 			return err
 		}
 	}
@@ -522,9 +528,9 @@ func appendAttributeValue(fields []field, path string, key string, attr pcommon.
 		return fields
 	}
 
-	if attr.Type() == pcommon.ValueTypeMap {
-		return appendAttributeFields(fields, flattenKey(path, key), attr.Map())
-	}
+	// if attr.Type() == pcommon.ValueTypeMap {
+	// 	return appendAttributeFields(fields, flattenKey(path, key), attr.Map())
+	// }
 
 	return append(fields, field{
 		key:   flattenKey(path, key),

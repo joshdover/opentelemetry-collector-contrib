@@ -9,24 +9,27 @@ import "go.opentelemetry.io/collector/pdata/pcommon"
 
 // dynamic index attribute key constants
 const (
-	indexPrefix = "elasticsearch.index.prefix"
-	indexSuffix = "elasticsearch.index.suffix"
+	indexPrefix         = "elasticsearch.index.prefix"
+	indexSuffix         = "elasticsearch.index.suffix"
+	dataStreamDataset   = "data_stream.dataset"
+	dataStreamNamespace = "data_stream.namespace"
+
+	defaultDataStreamNamespace = "default"
+	defaultDataStreamDataset   = "generic"
 )
 
-// resource is higher priotized than record attribute
-type attrGetter interface {
-	Attributes() pcommon.Map
-}
+// Retreive an attribute from resource or logrecord, span, or metric giving precdence to first item and falling back to
+// second or later items if necessary
+func getStrFromAttributes(name string, defaultVal string, attrMaps ...pcommon.Map) string {
+	var str string = defaultVal
 
-// retrieve attribute out of resource and record (span or log, if not found in resource)
-func getFromBothResourceAndAttribute(name string, resource attrGetter, record attrGetter) string {
-	var str string
-	val, exist := resource.Attributes().Get(name)
-	if !exist {
-		val, exist = record.Attributes().Get(name)
+	for _, attrMap := range attrMaps {
+		val, exist := attrMap.Get(name)
+		if exist {
+			str = val.AsString()
+			break
+		}
 	}
-	if exist {
-		str = val.AsString()
-	}
+
 	return str
 }

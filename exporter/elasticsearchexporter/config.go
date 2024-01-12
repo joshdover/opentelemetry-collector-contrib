@@ -45,6 +45,12 @@ type Config struct {
 	LogsIndex string `mapstructure:"logs_index"`
 	// fall back to pure LogsIndex, if 'elasticsearch.index.prefix' or 'elasticsearch.index.suffix' are not found in resource or attribute (prio: resource > attribute)
 	LogsDynamicIndex DynamicIndexSetting `mapstructure:"logs_dynamic_index"`
+
+	// This setting is required when logging pipelines used.
+	MetricsIndex string `mapstructure:"metrics_index"`
+	// fall back to pure LogsIndex, if 'elasticsearch.index.prefix' or 'elasticsearch.index.suffix' are not found in resource or attribute (prio: resource > attribute)
+	MetricsDynamicIndex DynamicIndexSetting `mapstructure:"metrics_dynamic_index"`
+
 	// This setting is required when traces pipelines used.
 	TracesIndex string `mapstructure:"traces_index"`
 	// fall back to pure TracesIndex, if 'elasticsearch.index.prefix' or 'elasticsearch.index.suffix' are not found in resource or attribute (prio: resource > attribute)
@@ -71,7 +77,8 @@ type LogstashFormatSettings struct {
 }
 
 type DynamicIndexSetting struct {
-	Enabled bool `mapstructure:"enabled"`
+	Enabled bool   `mapstructure:"enabled"`
+	Mode    string `mapstructure:"mode"` // prefix_suffix or data_stream
 }
 
 type HTTPClientSettings struct {
@@ -175,6 +182,7 @@ type MappingMode int
 const (
 	MappingNone MappingMode = iota
 	MappingECS
+	MappingOTel
 )
 
 var (
@@ -188,6 +196,8 @@ func (m MappingMode) String() string {
 		return ""
 	case MappingECS:
 		return "ecs"
+	case MappingOTel:
+		return "otel"
 	default:
 		return ""
 	}
@@ -198,6 +208,7 @@ var mappingModes = func() map[string]MappingMode {
 	for _, m := range []MappingMode{
 		MappingNone,
 		MappingECS,
+		MappingOTel,
 	} {
 		table[strings.ToLower(m.String())] = m
 	}

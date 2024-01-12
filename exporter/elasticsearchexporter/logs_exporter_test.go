@@ -122,7 +122,7 @@ func TestExporter_New(t *testing.T) {
 				cfg.Mapping.Dedot = false
 				cfg.Mapping.Dedup = true
 			}),
-			want: successWithInternalModel(&encodeModel{dedot: false, dedup: true}),
+			want: successWithInternalModel(&encodeModel{dedot: false, dedup: true, mapping: "ecs"}),
 		},
 	}
 
@@ -167,7 +167,7 @@ func TestExporter_PushEvent(t *testing.T) {
 		rec.WaitItems(2)
 	})
 
-	t.Run("publish with dynamic index", func(t *testing.T) {
+	t.Run("publish with dynamic index prefix_suffix mode", func(t *testing.T) {
 
 		rec := newBulkRecorder()
 		var (
@@ -205,6 +205,44 @@ func TestExporter_PushEvent(t *testing.T) {
 			},
 			map[string]string{
 				indexPrefix: prefix,
+			},
+		)
+
+		rec.WaitItems(1)
+	})
+
+	t.Run("publish with dynamic index data_stream mode", func(t *testing.T) {
+
+		rec := newBulkRecorder()
+
+		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+			rec.Record(docs)
+
+			data, err := docs[0].Action.MarshalJSON()
+			assert.Nil(t, err)
+
+			jsonVal := map[string]any{}
+			err = json.Unmarshal(data, &jsonVal)
+			assert.Nil(t, err)
+
+			create := jsonVal["create"].(map[string]any)
+			expected := "logs-my.dataset-my.namespace"
+			assert.Equal(t, expected, create["_index"].(string))
+
+			return itemsAllOK(docs)
+		})
+
+		exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
+			cfg.LogsDynamicIndex.Enabled = true
+			cfg.LogsDynamicIndex.Mode = "data_stream"
+		})
+
+		mustSendLogsWithAttributes(t, exporter,
+			map[string]string{
+				"data_stream.dataset": "my.dataset",
+			},
+			map[string]string{
+				"data_stream.namespace": "my.namespace",
 			},
 		)
 

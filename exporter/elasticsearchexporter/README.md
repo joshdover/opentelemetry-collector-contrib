@@ -68,6 +68,7 @@ This exporter supports sending OpenTelemetry logs to [Elasticsearch](https://www
     - `ecs`: Try to map fields defined in the
              [OpenTelemetry Semantic Conventions](https://github.com/open-telemetry/semantic-conventions)
              to [Elastic Common Schema (ECS)](https://www.elastic.co/guide/en/ecs/current/index.html).
+    - `otel`: Uses Elastic's preferred otel schema
   - `fields` (optional): Configure additional fields mappings.
   - `file` (optional): Read additional field mappings from the provided YAML file.
   - `dedup` (default=true): Try to find and remove duplicate fields/attributes
@@ -75,7 +76,7 @@ This exporter supports sending OpenTelemetry logs to [Elasticsearch](https://www
     libraries can produce duplicate fields (for example zap). Elasticsearch
     will reject documents that have duplicate fields.
   - `dedot` (default=true): When enabled attributes with `.` will be split into
-    proper json objects.
+    proper json objects. Ignored when `mapping.mode: otel`.
 - `sending_queue`
   - `enabled` (default = false)
   - `num_consumers` (default = 10): Number of consumers that dequeue batches; ignored if `enabled` is `false`
