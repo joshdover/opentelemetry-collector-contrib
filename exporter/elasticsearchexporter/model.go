@@ -51,14 +51,11 @@ const (
 func encodeResourceAndScopeAttributes(doc *objmodel.Document, resource pcommon.Resource, scope pcommon.InstrumentationScope) {
 	m := pcommon.NewMap()
 
-
 	r := m.PutEmptyMap("resource")
 	r.PutInt("dropped_attributes_count", int64(resource.DroppedAttributesCount()))
 	ra := r.PutEmptyMap("attributes")
 	resource.Attributes().CopyTo(ra)
-	// doc.AddAttributes("resource", r)
 
-	// s := pcommon.NewMap()
 	s := m.PutEmptyMap("instrumentation_scope")
 	s.PutStr("name", scope.Name())
 	s.PutStr("version", scope.Version())
@@ -172,6 +169,11 @@ func mapHash(h hash.Hash, m pcommon.Map) {
 }
 
 func metricHash(h hash.Hash, t pcommon.Timestamp, attrs pcommon.Map) string {
+	// Avoid any hashing if there are no attributes
+	if attrs.Len() == 0 {
+		return t.String()
+	}
+
 	h.Reset()
 
 	h.Write([]byte(t.AsTime().Format(time.RFC3339Nano)))
@@ -270,7 +272,7 @@ func (m *encodeModel) encodeMetrics(resource pcommon.Resource, metrics pmetric.M
 		} else if m.dedot && m.mapping != MappingOTel.String() {
 			doc.Sort()
 		}
-	
+
 		var buf bytes.Buffer
 		err := doc.Serialize(&buf, m.mapping != MappingOTel.String() && m.dedot)
 
