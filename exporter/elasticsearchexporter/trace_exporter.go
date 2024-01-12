@@ -52,7 +52,7 @@ func newTracesExporter(logger *zap.Logger, cfg *Config) (*elasticsearchTracesExp
 		maxAttempts = cfg.Retry.MaxRequests
 	}
 
-	model := &encodeModel{dedup: cfg.Mapping.Dedup, dedot: cfg.Mapping.Dedot}
+	model := &encodeModel{dedup: cfg.Mapping.Dedup, dedot: cfg.Mapping.Dedot, mapping: cfg.Mapping.Mode}
 
 	dynamicIndexMode := ""
 	switch cfg.LogsDynamicIndex.Mode {
@@ -126,7 +126,7 @@ func (e *elasticsearchTracesExporter) pushTraceRecord(ctx context.Context, resou
 					dsDataset = "otel." + dsDataset
 					// Update resource to keep fields in sync with data stream name
 					// currently assume that it was set on resource
-					resource.Attributes().PutStr("data_stream.dataset", dsDataset)
+					// resource.Attributes().PutStr("data_stream.dataset", dsDataset) // TODO not sure why this doesn't work
 				}
 
 				fIndex = fmt.Sprintf("%s-%s-%s", "traces", dsDataset, dsNamespace)
